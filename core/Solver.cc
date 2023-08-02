@@ -172,7 +172,7 @@ void Solver::detachClause(CRef cr, bool strict) {
     const Clause& c = ca[cr];
     assert(c.size() > 1);
     
-    if (strict){
+    if (strict){//严格分离操作
         remove(watches[~c[0]], Watcher(cr, c[1]));
         remove(watches[~c[1]], Watcher(cr, c[0]));
     }else{
@@ -189,7 +189,12 @@ void Solver::removeClause(CRef cr) {
     Clause& c = ca[cr];
     detachClause(cr);
     // Don't leave pointers to free'd memory!
-    if (locked(c)) vardata[var(c[0])].reason = CRef_Undef;
+    /*子句被上锁的条件：
+    子句第一个文字 c[0] 的赋值状态为真l_True  
+    c[0]对应变量的推导原因不为CRef_Undef
+    获取c[0]推导原因所对应的子句指针为子句c的引用
+    */
+    if (locked(c)) vardata[var(c[0])].reason = CRef_Undef;//CRef_Undef等价于给子句解锁 允许其他变量的推导
     c.mark(1); 
     ca.free(cr);
 }
@@ -224,15 +229,15 @@ void Solver::cancelUntil(int level) {
 
 Lit Solver::pickBranchLit()
 {
-    Var next = var_Undef;
+    Var next = var_Undef;//声明一个变量 next 并将其初始化为 var_Undef，表示下一个分支文字
 
-    // Random decision:
+    // Random decision: 进行随机决策
     if (drand(random_seed) < random_var_freq && !order_heap.empty()){
         next = order_heap[irand(random_seed,order_heap.size())];
         if (value(next) == l_Undef && decision[next])
             rnd_decisions++; }
 
-    // Activity based decision:
+    // Activity based decision: 基于变量活跃度进行决策
     while (next == var_Undef || value(next) != l_Undef || !decision[next])
         if (order_heap.empty()){
             next = var_Undef;
@@ -263,28 +268,28 @@ Lit Solver::pickBranchLit()
 |________________________________________________________________________________________________@*/
 void Solver::analyze(CRef confl, vec<Lit>& out_learnt, int& out_btlevel)
 {
-    int pathC = 0;
+    int pathC = 0;//表示当前路径中存在的未被满足的子句的数量
     Lit p     = lit_Undef;
 
     // Generate conflict clause:
     //
     out_learnt.push();      // (leave room for the asserting literal)
     int index   = trail.size() - 1;
-
+    //seen数组: 表示当前冲突子句在进行回溯过程中对子句中文字的访问的标记
     do{
         assert(confl != CRef_Undef); // (otherwise should be UIP)
         Clause& c = ca[confl];
 
         if (c.learnt())
             claBumpActivity(c);
-
+        //遍历冲突子句c，找到子句中未被标记过的变量
         for (int j = (p == lit_Undef) ? 0 : 1; j < c.size(); j++){
             Lit q = c[j];
 
             if (!seen[var(q)] && level(var(q)) > 0){
                 varBumpActivity(var(q));
                 seen[var(q)] = 1;
-                if (level(var(q)) >= decisionLevel())
+                if (level(var(q)) >= decisionLevel())//decisionLevel()获取当前的决策级别
                     pathC++;
                 else
                     out_learnt.push(q);
@@ -293,22 +298,22 @@ void Solver::analyze(CRef confl, vec<Lit>& out_learnt, int& out_btlevel)
         
         // Select next clause to look at:
         while (!seen[var(trail[index--])]);
-        p     = trail[index+1];
+        p = trail[index+1];
         confl = reason(var(p));
         seen[var(p)] = 0;
         pathC--;
 
-    }while (pathC > 0);
+    }while (pathC > 0);//知道冲突子句变成单元才结束
     out_learnt[0] = ~p;
 
     // Simplify conflict clause:
     //
     int i, j;
     out_learnt.copyTo(analyze_toclear);
-    if (ccmin_mode == 2){
+    if (ccmin_mode == 2){//保留当前文字所对应的变量没有决策原因或当前文字不是在 abstract_level 所表示的抽象层级下的冗余文字
         uint32_t abstract_level = 0;
         for (i = 1; i < out_learnt.size(); i++)
-            abstract_level |= abstractLevel(var(out_learnt[i])); // (maintain an abstraction of levels involved in conflict)
+            abstract_level |= abstractLevel(var(out_learnt[i])); // 对冲突中涉及的级别保持抽象(maintain an abstraction of levels involved in conflict)
 
         for (i = j = 1; i < out_learnt.size(); i++)
             if (reason(var(out_learnt[i])) == CRef_Undef || !litRedundant(out_learnt[i], abstract_level))
@@ -317,10 +322,10 @@ void Solver::analyze(CRef confl, vec<Lit>& out_learnt, int& out_btlevel)
     }else if (ccmin_mode == 1){
         for (i = j = 1; i < out_learnt.size(); i++){
             Var x = var(out_learnt[i]);
-
+            //保留当前文字所对应的变量没有决策原因
             if (reason(x) == CRef_Undef)
                 out_learnt[j++] = out_learnt[i];
-            else{
+            else{//保留包含上次冲突检测的单元文字p 保留子句中存在没有被访问过的文字且其决策层级>0的子句
                 Clause& c = ca[reason(var(out_learnt[i]))];
                 for (int k = 1; k < c.size(); k++)
                     if (!seen[var(c[k])] && level(var(c[k])) > 0){
@@ -331,17 +336,17 @@ void Solver::analyze(CRef confl, vec<Lit>& out_learnt, int& out_btlevel)
     }else
         i = j = out_learnt.size();
 
-    max_literals += out_learnt.size();
+    max_literals += out_learnt.size();//max_literals:学习子句中文字的最大个数
     out_learnt.shrink(i - j);
-    tot_literals += out_learnt.size();
+    tot_literals += out_learnt.size();//tot_literals:学习子句中文字的总个数
 
     // Find correct backtrack level:
     //
     if (out_learnt.size() == 1)
-        out_btlevel = 0;
+        out_btlevel = 0;//out_btlevel:冲突检测回溯到的决策层级
     else{
         int max_i = 1;
-        // Find the first literal assigned at the next-highest level:
+        // 查找分配给下一个最高级别的第一个文字 Find the first literal assigned at the next-highest level:
         for (int i = 2; i < out_learnt.size(); i++)
             if (level(var(out_learnt[i])) > level(var(out_learnt[max_i])))
                 max_i = i;
@@ -351,7 +356,7 @@ void Solver::analyze(CRef confl, vec<Lit>& out_learnt, int& out_btlevel)
         out_learnt[1]     = p;
         out_btlevel       = level(var(p));
     }
-
+    //将此次回溯过程中访问过的单元学习子句对应的变量的seen标记置为0
     for (int j = 0; j < analyze_toclear.size(); j++) seen[var(analyze_toclear[j])] = 0;    // ('seen[]' is now cleared)
 }
 
@@ -360,7 +365,7 @@ void Solver::analyze(CRef confl, vec<Lit>& out_learnt, int& out_btlevel)
 // visiting literals at levels that cannot be removed later.
 bool Solver::litRedundant(Lit p, uint32_t abstract_levels)
 {
-    analyze_stack.clear(); analyze_stack.push(p);
+    analyze_stack.clear(); analyze_stack.push(p);//回溯过程中访问过的单元学习子句的集合
     int top = analyze_toclear.size();
     while (analyze_stack.size() > 0){
         assert(reason(var(analyze_stack.last())) != CRef_Undef);
@@ -395,6 +400,7 @@ bool Solver::litRedundant(Lit p, uint32_t abstract_levels)
 |    Specialized analysis procedure to express the final conflict in terms of assumptions.
 |    Calculates the (possibly empty) set of assumptions that led to the assignment of 'p', and
 |    stores the result in 'out_conflict'.
+|    专门的分析过程，用假设来表示最终冲突。计算导致赋值“p”的一组假设（可能为空），并将结果存储在“out_conflict”中。
 |________________________________________________________________________________________________@*/
 void Solver::analyzeFinal(Lit p, vec<Lit>& out_conflict)
 {
@@ -425,7 +431,7 @@ void Solver::analyzeFinal(Lit p, vec<Lit>& out_conflict)
     seen[var(p)] = 0;
 }
 
-
+//将未定义状态的文字(sign默认值为false)添加到决策过程中，并修改其赋值状态、变量数据和变量赋值历史记录
 void Solver::uncheckedEnqueue(Lit p, CRef from)
 {
     assert(value(p) == l_Undef);
@@ -440,6 +446,7 @@ void Solver::uncheckedEnqueue(Lit p, CRef from)
 |  propagate : [void]  ->  [Clause*]
 |  
 |  Description:
+    传播所有排队的事实。如果发生冲突，则返回冲突子句，否则返回CRef_Undef。
 |    Propagates all enqueued facts. If a conflict arises, the conflicting clause is returned,
 |    otherwise CRef_Undef.
 |  
@@ -448,27 +455,27 @@ void Solver::uncheckedEnqueue(Lit p, CRef from)
 |________________________________________________________________________________________________@*/
 CRef Solver::propagate()
 {
-    CRef    confl     = CRef_Undef;
-    int     num_props = 0;
-    watches.cleanAll();
+    CRef    confl     = CRef_Undef;//表示当前子句允许其他变量推导
+    int     num_props = 0;//记录传播的次数
+    watches.cleanAll();//从列表中移除约束
 
     while (qhead < trail.size()){
         Lit            p   = trail[qhead++];     // 'p' is enqueued fact to propagate.
         vec<Watcher>&  ws  = watches[p];
         Watcher        *i, *j, *end;
         num_props++;
-
+        //对观察者列表遍历
         for (i = j = (Watcher*)ws, end = i + ws.size();  i != end;){
             // Try to avoid inspecting the clause:
             Lit blocker = i->blocker;
-            if (value(blocker) == l_True){
+            if (value(blocker) == l_True){//观察者的阻塞文字为l_True，则将观察者复制到新位置
                 *j++ = *i++; continue; }
 
-            // Make sure the false literal is data[1]:
+            // 确保错误文字（false literal）出现在数据项的索引1处 Make sure the false literal is data[1]:
             CRef     cr        = i->cref;
             Clause&  c         = ca[cr];
             Lit      false_lit = ~p;
-            if (c[0] == false_lit)
+            if (c[0] == false_lit)//如果观察者的第一个文字与错误文字相等，则交换第一个和第二个文字
                 c[0] = c[1], c[1] = false_lit;
             assert(c[1] == false_lit);
             i++;
@@ -476,32 +483,32 @@ CRef Solver::propagate()
             // If 0th watch is true, then clause is already satisfied.
             Lit     first = c[0];
             Watcher w     = Watcher(cr, first);
-            if (first != blocker && value(first) == l_True){
+            if (first != blocker && value(first) == l_True){//如果观察者的第一个文字不等于阻塞文字并且其赋值状态为真，则将观察者复制到新位置
                 *j++ = w; continue; }
 
             // Look for new watch:
             for (int k = 2; k < c.size(); k++)
                 if (value(c[k]) != l_False){
                     c[1] = c[k]; c[k] = false_lit;
-                    watches[~c[1]].push(w);
-                    goto NextClause; }
+                    watches[~c[1]].push(w);//将观察者添加到新观察文字对应的观察者列表中
+                    goto NextClause;//505 }
 
-            // Did not find watch -- clause is unit under assignment:
+            // Did not find watch -- clause is unit under assignment: 单子句
             *j++ = w;
-            if (value(first) == l_False){
+            if (value(first) == l_False){//说明发生冲突
                 confl = cr;
                 qhead = trail.size();
                 // Copy the remaining watches:
                 while (i < end)
                     *j++ = *i++;
             }else
-                uncheckedEnqueue(first, cr);
+                uncheckedEnqueue(first, cr);//对未赋值变量进行传播
 
         NextClause:;
         }
         ws.shrink(i - j);
     }
-    propagations += num_props;
+    propagations += num_props;//propagations:总的传播数
     simpDB_props -= num_props;
 
     return confl;
@@ -525,7 +532,7 @@ struct reduceDB_lt {
 void Solver::reduceDB()
 {
     int     i, j;
-    double  extra_lim = cla_inc / learnts.size();    // Remove any clause below this activity
+    double  extra_lim = cla_inc / learnts.size();    // 活跃度下界 Remove any clause below this activity
 
     sort(learnts, reduceDB_lt(ca));
     // Don't delete binary or locked clauses. From the rest, delete clauses from the first half
@@ -584,14 +591,14 @@ bool Solver::simplify()
     if (nAssigns() == simpDB_assigns || (simpDB_props > 0))
         return true;
 
-    // Remove satisfied clauses:
+    // Remove satisfied clauses: 学习子句
     removeSatisfied(learnts);
     if (remove_satisfied)        // Can be turned off.
         removeSatisfied(clauses);
     checkGarbage();
     rebuildOrderHeap();
 
-    simpDB_assigns = nAssigns();
+    simpDB_assigns = nAssigns();//attach与deattach之差
     simpDB_props   = clauses_literals + learnts_literals;   // (shouldn't depend on stats really, but it will do for now)
 
     return true;
@@ -615,12 +622,12 @@ lbool Solver::search(int nof_conflicts)
 {
     assert(ok);
     int         backtrack_level;
-    int         conflictC = 0;
+    int         conflictC = 0;//此轮搜索碰到的冲突次数
     vec<Lit>    learnt_clause;
     starts++;
 
     for (;;){
-        CRef confl = propagate();
+        CRef confl = propagate();//传播的结果:表示是否有冲突发生
         if (confl != CRef_Undef){
             // CONFLICT
             conflicts++; conflictC++;
@@ -628,10 +635,10 @@ lbool Solver::search(int nof_conflicts)
 
             learnt_clause.clear();
             analyze(confl, learnt_clause, backtrack_level);
-            cancelUntil(backtrack_level);
+            cancelUntil(backtrack_level);//回溯到backtrack_level
 
             if (learnt_clause.size() == 1){
-                uncheckedEnqueue(learnt_clause[0]);
+                uncheckedEnqueue(learnt_clause[0]);//将单元冲突子句加入到传播队列中
             }else{
                 CRef cr = ca.alloc(learnt_clause, true);
                 learnts.push(cr);
@@ -642,7 +649,11 @@ lbool Solver::search(int nof_conflicts)
 
             varDecayActivity();
             claDecayActivity();
-
+            
+            /*
+            相当于每次搜索迭代次数为learntsize_adjust_confl,
+            每次迭代完后将剩余迭代次数更新为150, 并重新设置最大学习子句的个数
+            */
             if (--learntsize_adjust_cnt == 0){
                 learntsize_adjust_confl *= learntsize_adjust_inc;
                 learntsize_adjust_cnt    = (int)learntsize_adjust_confl;
@@ -656,11 +667,11 @@ lbool Solver::search(int nof_conflicts)
             }
 
         }else{
-            // NO CONFLICT
+            // NO CONFLICT nof_conflicts:此次搜索中搜索到冲突子句的上限
             if (nof_conflicts >= 0 && conflictC >= nof_conflicts || !withinBudget()){
                 // Reached bound on number of conflicts:
-                progress_estimate = progressEstimate();
-                cancelUntil(0);
+                progress_estimate = progressEstimate();//返回求解器的进度估计值
+                cancelUntil(0);//取消此次搜索的所有假设
                 return l_Undef; }
 
             // Simplify the set of problem clauses:
@@ -673,16 +684,16 @@ lbool Solver::search(int nof_conflicts)
 
             Lit next = lit_Undef;
             while (decisionLevel() < assumptions.size()){
-                // Perform user provided assumption:
+                //Perform user provided assumption: Perform user provided assumption:
                 Lit p = assumptions[decisionLevel()];
                 if (value(p) == l_True){
                     // Dummy decision level:
-                    newDecisionLevel();
+                    newDecisionLevel();//用户做出的假设中当前决策层级的文字p的决策的层级在trail中的位置
                 }else if (value(p) == l_False){
                     analyzeFinal(~p, conflict);
                     return l_False;
                 }else{
-                    next = p;
+                    next = p;//假设中该变量未被赋值
                     break;
                 }
             }
@@ -692,19 +703,19 @@ lbool Solver::search(int nof_conflicts)
                 decisions++;
                 next = pickBranchLit();
 
-                if (next == lit_Undef)
+                if (next == lit_Undef)//分支搜索到底
                     // Model found:
                     return l_True;
             }
 
             // Increase decision level and enqueue 'next'
             newDecisionLevel();
-            uncheckedEnqueue(next);
+            uncheckedEnqueue(next);//把下个搜索分支分文字加入传播队列
         }
     }
 }
 
-
+//求解器的进度估计值
 double Solver::progressEstimate() const
 {
     double  progress = 0;
@@ -758,7 +769,7 @@ lbool Solver::solve_()
 
     max_learnts               = nClauses() * learntsize_factor;
     learntsize_adjust_confl   = learntsize_adjust_start_confl;
-    learntsize_adjust_cnt     = (int)learntsize_adjust_confl;
+    learntsize_adjust_cnt     = (int)learntsize_adjust_confl;//初始值为100
     lbool   status            = l_Undef;
 
     if (verbosity >= 1){

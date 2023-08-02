@@ -162,7 +162,7 @@ public:
     int          size        ()      const   { return header.size; }
     void         shrink      (int i)         { assert(i <= size()); if (header.has_extra) data[header.size-i] = data[header.size]; header.size -= i; }
     void         pop         ()              { shrink(1); }
-    bool         learnt      ()      const   { return header.learnt; }
+    bool         learnt      ()      const   { return header.learnt; }//占用 1 位的无符号整数位域。它可以表示 0 或 1，用于表示是否已经学习
     bool         has_extra   ()      const   { return header.has_extra; }
     uint32_t     mark        ()      const   { return header.mark; }
     void         mark        (uint32_t m)    { header.mark = m; }
